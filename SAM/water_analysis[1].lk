@@ -1,0 +1,87 @@
+
+working_dir = cwd();
+weather_dir = working_dir + '/weather_data';
+water_file = csvread(working_dir + '/hydro.csv', {'table'=true});
+results_file = working_dir + '/hydro_results.csv';
+
+// assume that you can install 1 MW of PV per 6 acres of land
+MW_per_acre = 1/6;
+
+// tell the script which case to use
+active_case('water');
+
+// extract data
+column_names = @water_file;
+gid = water_file{'RECORDID'};
+latitude = water_file{'LATITUDE'};
+longitude = water_file{'LONGITUDE'};
+land_area_acres = water_file{'SURFACE_AREA'};
+
+// prepare output
+annual_energy = alloc(#gid);
+for (i = 0; i != #gid; i++)
+	annual_energy[i] = 0;
+
+// loop over data and simulate
+for (case = 0; case != #gid; case++)
+{
+	// the current case 
+	outln('Running case number: ' + case + ' gid: ' + gid[case]);
+	
+	lat = latitude[case];
+	lon = longitude[case];
+	area = land_area_acres[case];
+		
+	// compute PV 
+	pv_kw = 0.27 * to_real(area) * MW_per_acre * 1000;
+	set('system_capacity', pv_kw);
+	
+	// Get resource data for location based on latitude and longitude
+	wf = weather_dir + '/' + lat + '_' + lon + '_tmy.csv';
+	
+	// Only download weather file if not already present
+	if (!file_exists(wf))
+	{
+		//create the url to download file from the NSRDB
+		url = webapi( 'nsrdb_download' );
+		url = replace(url, '<LON>', lon );
+		url = replace(url, '<LAT>', lat );
+		url = replace(url, '<DATASET>', 'tmy' );		
+		if ( !curl( url, {'file'=wf, 'message'='Downloading NSRDB solar data for: ' + lat + '_' + lon  + '...' }) )
+		{
+			msgbox('Error downloading data from the NREL NSRDB');
+			exit;
+		}
+	}
+	
+	//set the weather file in the simulation
+	set( 'use_specific_weather_file', 1 );
+	set( 'user_specified_weather_file', wf); 
+		
+	//run the simulation
+	errors = '';
+	success = simulate(errors, true);
+	if (!success) //only get results if it successfully ran
+		outln('Scenario failed: ' + errors);
+	else
+	{
+		// get annual energy
+		annual_energy[case] = get('annual_energy');
+	}
+	
+	// Note, move these two following lines out of the for loop to increase speed.  
+	// Currently done this way to ensure that if the simulation fails far in, you have incremental data written out
+	
+	// append results to input data
+	results = water_file;
+	results{'PV annual energy(kWh)'} = annual_energy;
+	
+	// write the results to a file
+	csvwrite(results_file, results);
+	
+	// clear results
+	results = {};
+}
+
+
+
